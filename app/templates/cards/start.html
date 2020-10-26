@@ -1,0 +1,24 @@
+{% extends 'card.html' %}
+{% block cardtitle %} Control ARK {% endblock %}
+{% block cardcontent %}
+<a id="start" class="btn btn-primary">Start</a>
+<a id="stop" class="btn btn-primary">Save and Stop</a>
+<pre id="response"></pre>
+<script>
+    var ws = new WebSocket("ws://{{ ws_endpoint }}/command");
+    ws.onmessage = function(event) { 
+        $('#response').html(event.data.trim())
+    }
+    $('#start').on('click', function(e) {
+        ws.send(JSON.stringify({
+            "cmd": "start"
+        }))
+    })
+    $('#stop').on('click', function(e) {
+        ws.send(JSON.stringify({
+            "cmd": "stop"
+        }))
+    })
+</script>
+
+{% endblock %}

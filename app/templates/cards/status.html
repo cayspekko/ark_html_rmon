@@ -1,0 +1,22 @@
+{% extends 'card.html' %}
+{% block cardtitle %} Ark status {% endblock %}
+{% block cardcontent %}
+
+</pre>
+    <table id='status_messages'></table>
+</pre>
+
+<script>
+    var ws = new WebSocket("ws://{{ ws_endpoint }}/status");
+    ws.onmessage = function(event) {
+        var table = document.getElementById('status_messages')
+        var tr = document.createElement('tr')
+        var td = document.createElement('td')
+        table.innerText = ''
+        table.innerHTML = ''
+        td.innerHTML = event.data.trim()
+        tr.appendChild(td)
+        table.appendChild(tr)
+    };
+</script>
+{% endblock %}
