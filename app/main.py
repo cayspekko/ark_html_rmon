@@ -40,7 +40,7 @@ templates = Jinja2Templates(directory="templates")
 security = HTTPBasic()
 
 database = {}
-users = {"ripp": "1mth3b3st", "cayspekko": "1mth3b3st"}
+users = json.load(open('secrets.json')) 
 
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
