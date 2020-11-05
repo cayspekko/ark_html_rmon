@@ -2,19 +2,21 @@ import asyncio
 import time 
 import json
 import os
-import secrets
 
 from dotenv import load_dotenv
 load_dotenv(verbose=True)
 
 from asyncio.subprocess import PIPE, STDOUT
 
-from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status
+from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status, Form 
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from passlib.context import CryptContext
 from datetime import datetime
+from tinydb import TinyDB, Query
+from tinydb.operations import set as db_set
 
 RUN_CMD = """#!/bin/bash
 docker run -d --restart=always -v steam:/home/steam/Steam \
@@ -26,10 +28,12 @@ docker run -d --restart=always -v steam:/home/steam/Steam \
         -e am_arkflag_crossplay=true \
         -e am_arkflag_NoBattlEye=true \
         -e am_ActiveMods=731604991,89384064 \
+        -e am_HarvestAmountMultiplier=1.25000 \
+        -e am_DayTimeSpeedScale=0.70000 \
+        -e am_NightTimeSpeedScale=0.30000 \
+        -e am_bDisableStructurePlacementCollision=true \
         --name ark \
         thmhoag/arkserver"""
-
-
 
 app = FastAPI()
 
@@ -39,8 +43,10 @@ templates = Jinja2Templates(directory="templates")
 
 security = HTTPBasic()
 
+users = TinyDB('db.json') 
 database = {}
-users = json.load(open('secrets.json')) 
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
@@ -58,12 +64,9 @@ async def startup_event():
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
-    for u, p in users.items():
-        correct_username = secrets.compare_digest(credentials.username, u)
-        correct_password = secrets.compare_digest(credentials.password, p)
-        if correct_username and correct_password:
-            break
-    else:
+    User = Query()
+    u = users.get(User.username == credentials.username)
+    if not (u and pwd_context.verify(credentials.password, u['password'])):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -75,8 +78,9 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
         "cards/status.html",
         "cards/players.html",
         "cards/start.html",
+        "cards/password.html"
     ]
-    return templates.TemplateResponse("cards.html", {"request": request, "cards": cards, "ws_endpoint": os.getenv('WS_ENDPOINT')})
+    return templates.TemplateResponse("cards.html", {"request": request, "cards": cards, "ws_endpoint": os.getenv('WS_ENDPOINT'), "credentials": credentials})
 
 
 async def websocket_poll(websocket, key="status"):
@@ -95,12 +99,18 @@ async def websocket_poll(websocket, key="status"):
         async for l in get_lines(cmd):
             rval.append(l.decode())
 
-        
         if not _hash(rval, key):
             db_key["updated"] = [_now()]
             db_key["payload"] = rval
         await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
         await asyncio.sleep(5)
+
+@app.post("/change_password")
+async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
+    User = Query()
+    new_pw = pwd_context.hash(psw)
+    users.update(db_set('password', new_pw), User.username == credentials.username)
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND) 
 
 
 @app.websocket("/status")

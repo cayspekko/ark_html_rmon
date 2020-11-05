@@ -5,7 +5,7 @@ RUN apt update && apt -y install gcc make
 RUN wget https://github.com/theZiz/aha/archive/0.5.1.tar.gz \
   && tar xzvf 0.5.1.tar.gz && cd aha-0.5.1 && make && cp aha /usr/local/bin
 
-RUN pip install fastapi uvicorn aiofiles jinja2 python-dotenv
+RUN pip install fastapi uvicorn aiofiles jinja2 python-dotenv tinydb python-multipart passlib bcrypt
 
 RUN wget https://github.com/vi/websocat/releases/download/v1.6.0/websocat_1.6.0_ssl1.1_amd64.deb
 RUN dpkg -i websocat_1.6.0_ssl1.1_amd64.deb
