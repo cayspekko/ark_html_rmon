@@ -7,8 +7,8 @@
 </pre>
 
 <script>
-    var ws = new WebSocket("ws://{{ ws_endpoint }}/status");
-    ws.onmessage = function(event) {
+    var status_ws = new WebSocket("ws://{{ ws_endpoint }}/status");
+    status_ws.onmessage = function(event) {
         var table = document.getElementById('status_messages')
         var tr = document.createElement('tr')
         var td = document.createElement('td')

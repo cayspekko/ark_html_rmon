@@ -18,6 +18,9 @@ from datetime import datetime
 from tinydb import TinyDB, Query
 from tinydb.operations import set as db_set
 
+import logging
+logger = logging.getLogger()
+
 RUN_CMD = """#!/bin/bash
 docker run -d --restart=always -v steam:/home/steam/Steam \
         -v ark:/ark \
@@ -31,7 +34,6 @@ docker run -d --restart=always -v steam:/home/steam/Steam \
         -e am_HarvestAmountMultiplier=1.25000 \
         -e am_DayTimeSpeedScale=0.70000 \
         -e am_NightTimeSpeedScale=0.30000 \
-        -e am_bDisableStructurePlacementCollision=true \
         --name ark \
         thmhoag/arkserver"""
 
@@ -44,23 +46,28 @@ templates = Jinja2Templates(directory="templates")
 security = HTTPBasic()
 
 users = TinyDB('db.json') 
+settings = users.table('settings')
 database = {}
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
+
 
 def _hash(new_payload, key="status"):
     new_hash = hash("".join(new_payload))
     old_hash = hash("".join(database[key]["payload"]))
     return (new_hash == old_hash)
 
+
 @app.on_event("startup")
 async def startup_event():
     for key in ("status", "players"):
         database[key] = {"payload": ["checking..."],
                         "updated": [_now()]}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
@@ -77,10 +84,17 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
         "cards/default.html",
         "cards/status.html",
         "cards/players.html",
+        "cards/commands.html",
+        "cards/settings.html",
         "cards/start.html",
         "cards/password.html"
     ]
-    return templates.TemplateResponse("cards.html", {"request": request, "cards": cards, "ws_endpoint": os.getenv('WS_ENDPOINT'), "credentials": credentials})
+
+    return templates.TemplateResponse("cards.html", {
+        "request": request, 
+        "cards": cards, "ws_endpoint": os.getenv('WS_ENDPOINT'), 
+        "credentials": credentials
+        })
 
 
 async def websocket_poll(websocket, key="status"):
@@ -105,6 +119,7 @@ async def websocket_poll(websocket, key="status"):
         await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
         await asyncio.sleep(5)
 
+
 @app.post("/change_password")
 async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
     User = Query()
@@ -117,9 +132,11 @@ async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials
 async def status_endpoint(websocket: WebSocket):
     await websocket_poll(websocket)
 
+
 @app.websocket("/players")
 async def players_endpoint(websocket: WebSocket):
     await websocket_poll(websocket, key="players")
+
 
 @app.websocket("/command")
 async def command_endpoint(websocket: WebSocket):
@@ -132,10 +149,38 @@ async def command_endpoint(websocket: WebSocket):
             cmd = f"{RUN_CMD} | aha --no-header"
         elif data.get('cmd') == "stop":
             cmd = f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark && docker rm ark"
+        elif data.get('cmd') == "kick":
+            player_id = data.get('player_id')
+            cmd = f"docker exec -i ark arkmanager rconcmd \"kickplayer {player_id}\" | aha --no-header"
+        elif data.get('cmd') == "cancelshutdown":
+            cmd = f"docker exec -i ark arkmanager cancelshutdown | aha --no-header"
         rval = []
         async for l in get_lines(cmd):
             rval.append(l.decode())
         await websocket.send_text("</br>".join(rval))
+
+
+@app.websocket('/settings')
+async def settings_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await websocket.send_text(json.dumps(settings.all()))
+
+    while True:
+        data = await websocket.receive_text()
+        data = json.loads(data)
+        if data.get('cmd') == 'put':
+            settings.truncate()
+            settings.insert_multiple(data.get('data'))
+
+            cmd = "docker run -i --rm -v ark:/ark --name ark_oneshot thmhoag/arkserver /ark/update_game_ini.sh "
+            for setting in settings.all():
+                cmd += f"{setting['key']}={setting['value']} "
+            cmd += " | aha --no-header"
+
+            async for l in get_lines(cmd):
+                logger.info(l)
+
+        await websocket.send_text(json.dumps(settings.all()))
 
 
 async def get_lines(shell_command):
