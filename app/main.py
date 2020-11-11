@@ -105,8 +105,7 @@ async def websocket_poll(websocket, key="status"):
     await websocket.send_text(old_recent)
 
     while True:
-        await asyncio.sleep(5)
-        
+        await asyncio.sleep(1)
         await poll_lock.acquire()
         db_key = poll_status.get(Poll.key == key) or {}
 
