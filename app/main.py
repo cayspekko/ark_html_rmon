@@ -9,7 +9,7 @@ load_dotenv(verbose=True)
 from asyncio.subprocess import PIPE, STDOUT
 
 from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status, Form 
-from starlette.websockets import WebSocketDisconnect
+from starlette.websockets import WebSocketDisconnect, ConnectionClosedOK
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
