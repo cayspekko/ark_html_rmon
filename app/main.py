@@ -9,7 +9,7 @@ load_dotenv(verbose=True)
 from asyncio.subprocess import PIPE, STDOUT
 
 from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status, Form 
-from starlette.websockets import WebSocketDisconnect, ConnectionClosedOK
+from starlette.websockets import WebSocketDisconnect
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -137,7 +137,7 @@ async def websocket_poll(websocket, key="status"):
             try:
                 print()
                 await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
-            except (WebSocketDisconnect, ConnectionClosedOK):
+            except WebSocketDisconnect:
                 await websocket.close()
                 return
 
@@ -166,7 +166,7 @@ async def command_endpoint(websocket: WebSocket):
     while True:
         try:
             data = await websocket.receive_text()
-        except (WebSocketDisconnect, ConnectionClosedOK):
+        except WebSocketDisconnect:
             await websocket.close()
             return
         data = json.loads(data)
@@ -200,7 +200,7 @@ async def settings_endpoint(websocket: WebSocket):
     while True:
         try:
             data = await websocket.receive_text()
-        except (WebSocketDisconnect, ConnectionClosedOK):
+        except WebSocketDisconnect:
             await websocket.close()
             return
         data = json.loads(data)
@@ -227,7 +227,7 @@ async def am_settings_endpoint(websocket: WebSocket):
     while True:
         try:
             data = await websocket.receive_text()
-        except (WebSocketDisconnect, ConnectionClosedOK):
+        except WebSocketDisconnect:
             await websocket.close()
             return
         data = json.loads(data)
