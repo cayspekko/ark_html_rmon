@@ -1,0 +1,11 @@
+{% extends 'card.html' %}
+{% block cardtitle %} Ark Manager Settings {% endblock %}
+{% block cardcontent %}
+<!--AppendGrid table element-->
+<table id="tblAmAppendGrid"></table>
+
+<!--Script for initialize AppendGrid-->
+<script>
+    var am_grid = new SettingsGrid("tblAmAppendGrid", "ws://{{ ws_endpoint }}/am_settings")
+</script>
+{% endblock %}

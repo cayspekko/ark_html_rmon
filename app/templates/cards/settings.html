@@ -6,65 +6,6 @@
 
 <!--Script for initialize AppendGrid-->
 <script>
-    var settings_ws = new WebSocket("ws://{{ ws_endpoint }}/settings");
-
-    function put_data(e){
-        if(e){
-            var check = myAppendGrid.getRowValue(myAppendGrid.getRowIndex(e.uniqueIndex))
-            if(!(check['key'] && check['value']))
-                return
-        }
-
-        var data = myAppendGrid.getAllValue()
-        settings_ws.send(JSON.stringify({
-            "cmd": "put",
-            "data": data
-        }))
-    }
-
-    var myAppendGrid = new AppendGrid({
-        element: "tblAppendGrid",
-        uiFramework: "bootstrap4",
-        iconFramework: "fontawesome5",
-        initRows: 0,
-        columns: [
-            {
-                name: "key",
-                display: "Key",
-                events: {
-                    change: function(e){
-                        put_data(e)
-                    }
-                }
-            },
-            {
-                name: "value",
-                display: "Value",
-                events: {
-                    change: function(e){
-                        put_data(e)
-                    }
-                }
-            },
-        ],
-        hideButtons: {
-            moveUp: true,
-            moveDown: true,
-            insert: true,
-        },
-        sectionClasses: {
-            table: "table-sm",
-            control: "form-control-sm",
-            buttonGroup: "btn-group-sm"
-        },
-        afterRowRemoved: function(caller, rowIndex){
-            put_data()
-        }
-    });
-
-    settings_ws.onmessage = function(event) { 
-        data = JSON.parse(event.data);
-        myAppendGrid.load(data)
-    }
+    var game_ini_grid = new SettingsGrid("tblAppendGrid", "ws://{{ ws_endpoint }}/settings")
 </script>
 {% endblock %}
