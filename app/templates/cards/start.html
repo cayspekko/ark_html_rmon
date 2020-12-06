@@ -7,7 +7,7 @@
 <a id="logs" class="btn btn-primary">Logs</a>
 <pre id="response"></pre>
 <script>
-    var start_ws = new WebSocket("ws://{{ ws_endpoint }}/command");
+    var start_ws = new ReconnectingWebSocket("ws://{{ ws_endpoint }}/command");
     start_ws.onmessage = function(event) { 
         $('#response').html(event.data.trim())
     }

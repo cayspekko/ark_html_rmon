@@ -7,7 +7,7 @@
 </pre>
 
 <script>
-    var players_ws = new WebSocket("ws://{{ ws_endpoint }}/players");
+    var players_ws = new ReconnectingWebSocket("ws://{{ ws_endpoint }}/players");
     players_ws.onmessage = function(event) {
         var table = document.getElementById('players_messages')
         var tr = document.createElement('tr')

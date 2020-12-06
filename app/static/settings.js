@@ -2,7 +2,7 @@ class SettingsGrid {
     constructor(element_id, ws_endpoint) {
         this.element_id = element_id
 
-        this.settings_ws = new WebSocket(ws_endpoint);
+        this.settings_ws = new ReconnectingWebSocket(ws_endpoint);
 
         var me = this
    

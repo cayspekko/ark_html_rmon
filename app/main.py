@@ -109,7 +109,7 @@ async def websocket_poll(websocket, key="status"):
         await poll_lock.acquire()
         db_key = poll_status.get(Poll.key == key) or {}
 
-        if not db_key or (time.time() - db_key["time"]) > 5:
+        if not db_key or (time.time() - db_key["time"]) > 3:
 
             cmd = 'docker exec -i ark arkmanager status | aha --no-header'
 
