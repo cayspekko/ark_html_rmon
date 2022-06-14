@@ -1,6 +1,11 @@
 {% extends 'card.html' %}
 {% block cardtitle %} Control ARK {% endblock %}
 {% block cardcontent %}
+<select id="select" class="form-select" aria-label="Select World">
+    <option selected>Select World</option>
+    <option value="TheIsland">TheIsland</option>
+    <option value="Fjordur">Fjordur</option>
+  </select>
 <a id="start" class="btn btn-primary">Start</a>
 <a id="stop" class="btn btn-primary">Save and Stop</a>
 <a id="cancelshutdown" class="btn btn-primary">Cancel Shutdown</a>
@@ -12,8 +17,10 @@
         $('#response').html(event.data.trim())
     }
     $('#start').on('click', function(e) {
+        var selected = $('#select option:selected').text();
         start_ws.send(JSON.stringify({
-            "cmd": "start"
+            "cmd": "start",
+            "world": selected
         }))
     })
     $('#stop').on('click', function(e) {

@@ -20,7 +20,7 @@ from tinydb import TinyDB, Query
 from tinydb.operations import set as db_set
 
 import logging
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 RUN_CMD = """#!/bin/bash
 docker rm ark
@@ -32,7 +32,8 @@ docker run -d --restart=always -v steam:/home/steam/Steam \
         -p 32330:32330 -p 32330:32330/udp \
         -e am_arkflag_crossplay=true \
         -e am_arkflag_NoBattlEye=true \
-        {} \
+        -e am_serverMap={0} \
+        {1} \
         --name ark \
         thmhoag/arkserver"""
 
@@ -134,7 +135,6 @@ async def websocket_poll(websocket, key="status"):
         if old_recent != recent:
             old_recent = recent
             try:
-                print()
                 await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
             except WebSocketDisconnect:
                 await websocket.close()
@@ -165,6 +165,7 @@ async def command_endpoint(websocket: WebSocket):
     while True:
         try:
             data = await websocket.receive_text()
+            logger.info("command data: %s" % data)
         except WebSocketDisconnect:
             await websocket.close()
             return
@@ -172,10 +173,11 @@ async def command_endpoint(websocket: WebSocket):
         cmd = "docker ps"
         if data.get('cmd') == "start":
             cmd = f"{RUN_CMD} | aha --no-header"
+            world = data.get('world') or "TheIsland"
             am_s = ""
             for d in am_settings.all():
                 am_s += f"-e {d['key']}=\"{d['value']}\" "
-            cmd = cmd.format(am_s)
+            cmd = cmd.format(world, am_s)
         elif data.get('cmd') == "stop":
             cmd = f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark"
         elif data.get('cmd') == "kick":
