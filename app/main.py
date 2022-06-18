@@ -10,6 +10,7 @@ from asyncio.subprocess import PIPE, STDOUT
 
 from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status, Form 
 from starlette.websockets import WebSocketDisconnect
+from websockets.exceptions import ConnectionClosed
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,14 +33,9 @@ docker run -d --restart=always -v steam:/home/steam/Steam \
         -p 32330:32330 -p 32330:32330/udp \
         -e am_arkflag_crossplay=true \
         -e am_arkflag_NoBattlEye=true \
-        -e am_serverMap={0} \
-        {1} \
+        {} \
         --name ark \
         thmhoag/arkserver"""
-
-app = FastAPI()
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 templates = Jinja2Templates(directory="templates")
 
@@ -48,12 +44,19 @@ security = HTTPBasic()
 users = TinyDB('db.json') 
 settings = users.table('settings')
 am_settings = users.table('am_settings')
+gu_settings = users.table('gu_settings')
 poll_status = users.table('poll_status')
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-poll_lock = asyncio.Lock()
+poll_lock = None
+async def startup():
+    global poll_lock
+    poll_lock = asyncio.Lock()
 
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
+app.add_event_handler("startup", startup)
 
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
@@ -82,8 +85,9 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
         "cards/start.html",
         "cards/players.html",
         "cards/commands.html",
-        "cards/settings.html",
         "cards/am_settings.html",
+        "cards/settings.html",
+        "cards/gu_settings.html",
         "cards/password.html"
     ]
 
@@ -106,7 +110,7 @@ async def websocket_poll(websocket, key="status"):
     await websocket.send_text(old_recent)
 
     while True:
-        await asyncio.sleep(1)
+        await asyncio.sleep(5)
         await poll_lock.acquire()
         db_key = poll_status.get(Poll.key == key) or {}
 
@@ -136,7 +140,7 @@ async def websocket_poll(websocket, key="status"):
             old_recent = recent
             try:
                 await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, ConnectionClosed):
                 await websocket.close()
                 return
 
@@ -173,11 +177,10 @@ async def command_endpoint(websocket: WebSocket):
         cmd = "docker ps"
         if data.get('cmd') == "start":
             cmd = f"{RUN_CMD} | aha --no-header"
-            world = data.get('world') or "TheIsland"
             am_s = ""
             for d in am_settings.all():
                 am_s += f"-e {d['key']}=\"{d['value']}\" "
-            cmd = cmd.format(world, am_s)
+            cmd = cmd.format(am_s)
         elif data.get('cmd') == "stop":
             cmd = f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark"
         elif data.get('cmd') == "kick":
@@ -237,6 +240,24 @@ async def am_settings_endpoint(websocket: WebSocket):
             am_settings.insert_multiple(data.get('data'))
 
         await websocket.send_text(json.dumps(am_settings.all()))
+
+@app.websocket('/gu_settings')
+async def gu_settings_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await websocket.send_text(json.dumps(gu_settings.all()))
+
+    while True:
+        try:
+            data = await websocket.receive_text()
+        except WebSocketDisconnect:
+            await websocket.close()
+            return
+        data = json.loads(data)
+        if data.get('cmd') == 'put':
+            gu_settings.truncate()
+            gu_settings.insert_multiple(data.get('data'))
+
+        await websocket.send_text(json.dumps(gu_settings.all()))
 
 
 async def get_lines(shell_command):
