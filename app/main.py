@@ -2,8 +2,10 @@ import asyncio
 import time 
 import json
 import os
+import re
 
 from dotenv import load_dotenv
+from pydantic import Json
 load_dotenv(verbose=True)
 
 from asyncio.subprocess import PIPE, STDOUT
@@ -21,6 +23,8 @@ from datetime import datetime
 from tinydb import TinyDB, Query
 from tinydb.operations import set as db_set
 from filelock import FileLock
+
+ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # matches ansi escape characters in strings
 
 # logging solution in docker https://github.com/tiangolo/uvicorn-gunicorn-fastapi-docker/issues/19#issuecomment-720720048
 import logging
@@ -93,8 +97,10 @@ app.add_event_handler("startup", startup)
 
 logger.info("___---___--- START APP (worker) ---___---___")
 
+
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
+
 
 def _hash(new_payload, key="status"):
     database = poll_status.get(Query().key == key) or {}
@@ -103,8 +109,7 @@ def _hash(new_payload, key="status"):
     return (new_hash == old_hash)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
+def _authorize(credentials):
     User = Query()
     u = users.get(User.username == credentials.username)
     if not (u and pwd_context.verify(credentials.password, u['password'])):
@@ -113,6 +118,117 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Basic"}
         )
+
+
+def _run_cmd():
+    cmd = RUN_CMD
+    am_s = ""
+    for d in am_settings.all():
+        am_s += f"-e {d['key']}=\"{d['value']}\" "
+    cmd = cmd.format(am_s)
+    return cmd
+
+
+@app.get("/api/status")
+async def api_status(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = 'docker exec -i ark arkmanager status'
+
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        # beautify output
+        l = l.decode()
+        l = ansi_escape.sub('', l)
+        l = l.strip()
+        if not l:
+            continue
+        rval.append(l)
+
+    return {"data": rval}
+
+
+@app.get("/api/players")
+async def api_players(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = 'docker exec -i ark arkmanager rconcmd listplayers'
+
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        rval.append(l.decode())
+
+    return {"data": rval}
+
+
+@app.post('/api/start')
+async def api_start(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = _run_cmd()
+
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        rval.append(l.decode())
+
+    return {"data": rval}
+
+
+@app.post('/api/stop')
+async def api_stop(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = f"docker exec -i ark arkmanager stop --saveworld && docker kill ark"
+
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        rval.append(l.decode())
+
+    return {"data": rval}
+
+
+@app.get("/api/logs")
+async def api_logs(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = 'docker logs ark'
+
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        # beautify output
+        l = l.decode()
+        l = ansi_escape.sub('', l)
+        l = l.strip()
+        if not l:
+            continue
+        rval.append(l)
+
+    return {"data": rval}
+
+@app.post("/api/change_password")
+async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    User = Query()
+    new_pw = pwd_context.hash(psw)
+    with lock:
+        users.update(db_set('password', new_pw), User.username == credentials.username)
+    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND) 
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
 
     cards = [
         "cards/default.html",
@@ -191,15 +307,6 @@ async def websocket_poll(websocket, key="status"):
                 return
 
 
-@app.post("/change_password")
-async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
-    User = Query()
-    new_pw = pwd_context.hash(psw)
-    with lock:
-        users.update(db_set('password', new_pw), User.username == credentials.username)
-    return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND) 
-
-
 @app.websocket("/status")
 async def status_endpoint(websocket: WebSocket):
     await websocket_poll(websocket)
@@ -224,11 +331,7 @@ async def command_endpoint(websocket: WebSocket):
         data = json.loads(data)
         cmd = "docker ps"
         if data.get('cmd') == "start":
-            cmd = f"{RUN_CMD} | aha --no-header"
-            am_s = ""
-            for d in am_settings.all():
-                am_s += f"-e {d['key']}=\"{d['value']}\" "
-            cmd = cmd.format(am_s)
+            cmd = f"{_run_cmd()} | aha --no-header"
         elif data.get('cmd') == "stop":
             cmd = f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark"
         elif data.get('cmd') == "kick":
