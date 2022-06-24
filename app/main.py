@@ -15,12 +15,32 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.logger import logger as fastapi_logger
 from passlib.context import CryptContext
 from datetime import datetime
 from tinydb import TinyDB, Query
 from tinydb.operations import set as db_set
+from filelock import FileLock
 
+# logging solution in docker https://github.com/tiangolo/uvicorn-gunicorn-fastapi-docker/issues/19#issuecomment-720720048
 import logging
+gunicorn_logger = logging.getLogger("gunicorn")
+log_level = gunicorn_logger.level
+
+root_logger = logging.getLogger()
+gunicorn_error_logger = logging.getLogger("gunicorn.error")
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+
+# Use gunicorn error handlers for root, uvicorn, and fastapi loggers
+root_logger.handlers = gunicorn_error_logger.handlers
+uvicorn_access_logger.handlers = gunicorn_error_logger.handlers
+fastapi_logger.handlers = gunicorn_error_logger.handlers
+
+# Pass on logging levels for root, uvicorn, and fastapi loggers
+root_logger.setLevel(log_level)
+uvicorn_access_logger.setLevel(log_level)
+fastapi_logger.setLevel(log_level)
+
 logger = logging.getLogger(__name__)
 
 RUN_CMD = """#!/bin/bash
@@ -41,22 +61,37 @@ templates = Jinja2Templates(directory="templates")
 
 security = HTTPBasic()
 
-users = TinyDB('db.json') 
-settings = users.table('settings')
-am_settings = users.table('am_settings')
-gu_settings = users.table('gu_settings')
-poll_status = users.table('poll_status')
+users = None
+settings = None
+am_settings = None
+gu_settings = None
+poll_status = None
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = None
 
-poll_lock = None
+lock = None
+
 async def startup():
-    global poll_lock
-    poll_lock = asyncio.Lock()
+    global users, settings, am_settings, gu_settings, poll_status, pwd_context, lock
+
+    logger.info('in startup')
+
+    users = TinyDB('db.json') 
+    settings = users.table('settings')
+    am_settings = users.table('am_settings')
+    gu_settings = users.table('gu_settings')
+    poll_status = users.table('poll_status')
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    lock = FileLock('db.json.lock')
+
+    logger.info('end startup')
+
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_event_handler("startup", startup)
+
+logger.info("___---___--- START APP (worker) ---___---___")
 
 def _now():
     return datetime.now().strftime("%h/%d/%Y  %I:%M:%S %p")
@@ -99,27 +134,34 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
 
 
 async def websocket_poll(websocket, key="status"):
+    await websocket.accept()
+    logger.info('begin websocket_poll on %s', key)
     Poll = Query()
     db_key = poll_status.get(Poll.key == key) or {}
 
-    await websocket.accept()
     updated = db_key.get("updated") or [_now()]
     payload = db_key.get("payload") or ["checking..."]
 
     old_recent = "</br>".join(updated + payload)
+    logger.debug('sending text to websocket on key %s', key)
     await websocket.send_text(old_recent)
 
     while True:
         await asyncio.sleep(5)
-        await poll_lock.acquire()
-        db_key = poll_status.get(Poll.key == key) or {}
 
-        if not db_key or (time.time() - db_key["time"]) > 3:
+        db_key = poll_status.get(Poll.key == key) or {}
+        time_now = time.time()
+
+        if not db_key or (time_now - db_key["time"]) > 5:
+            with lock:
+                poll_status.update({"time":time.time()}, Poll.key == key)            
 
             cmd = 'docker exec -i ark arkmanager status | aha --no-header'
 
             if key == "players":
                 cmd =  "docker exec -i ark arkmanager rconcmd listplayers | aha --no-header"
+
+            logger.debug('executing command %s', cmd)
 
             rval = []
             async for l in get_lines(cmd):
@@ -128,8 +170,8 @@ async def websocket_poll(websocket, key="status"):
             if not _hash(rval, key):
                 db_key["updated"] = [_now()]
                 db_key["payload"] = rval
-                poll_status.upsert({"key":key, "time":time.time(), "updated": db_key["updated"], "payload": db_key["payload"]}, Poll.key == key)
-        poll_lock.release()
+                with lock:
+                    poll_status.upsert({"key":key, "updated": db_key["updated"], "payload": db_key["payload"]}, Poll.key == key)
 
         updated = db_key.get("updated") or [_now()]
         payload = db_key.get("payload") or ["checking..."]
@@ -139,8 +181,12 @@ async def websocket_poll(websocket, key="status"):
         if old_recent != recent:
             old_recent = recent
             try:
-                await websocket.send_text("</br>".join(db_key["updated"] + db_key['payload']))
-            except (WebSocketDisconnect, ConnectionClosed):
+
+                logger.debug('sending text to websocket on key %s', key)
+                logger.debug(old_recent)
+                await websocket.send_text(old_recent)
+            except (WebSocketDisconnect, ConnectionClosed) as e:
+                logger.error('got exception while send_text: %s', e)
                 await websocket.close()
                 return
 
@@ -149,7 +195,8 @@ async def websocket_poll(websocket, key="status"):
 async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
     User = Query()
     new_pw = pwd_context.hash(psw)
-    users.update(db_set('password', new_pw), User.username == credentials.username)
+    with lock:
+        users.update(db_set('password', new_pw), User.username == credentials.username)
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND) 
 
 
@@ -170,7 +217,8 @@ async def command_endpoint(websocket: WebSocket):
         try:
             data = await websocket.receive_text()
             logger.info("command data: %s" % data)
-        except WebSocketDisconnect:
+        except WebSocketDisconnect as e:
+            logger.error('got error trying to receive_text %s', e)
             await websocket.close()
             return
         data = json.loads(data)
@@ -191,6 +239,9 @@ async def command_endpoint(websocket: WebSocket):
         elif data.get('cmd') == "logs":
             cmd = f"docker logs ark | aha --no-header"
         rval = []
+
+        logger.debug('executing command %s', cmd)
+
         async for l in get_lines(cmd):
             rval.append(l.decode())
         await websocket.send_text("</br>".join(rval))
@@ -209,16 +260,19 @@ async def settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            settings.truncate()
-            settings.insert_multiple(data.get('data'))
+            with lock:
+                settings.truncate()
+                settings.insert_multiple(data.get('data'))
 
             cmd = "docker run -i --rm -v ark:/ark --name ark_oneshot thmhoag/arkserver /ark/update_game_ini.sh "
             for setting in settings.all():
                 cmd += f"{setting['key']}={setting['value']} "
             cmd += " | aha --no-header"
 
+            logger.debug('executing cmd %s:', cmd)
+
             async for l in get_lines(cmd):
-                logger.info(l)
+                logger.debug(l)
 
         await websocket.send_text(json.dumps(settings.all()))
 
@@ -236,10 +290,12 @@ async def am_settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            am_settings.truncate()
-            am_settings.insert_multiple(data.get('data'))
+            with lock:
+                am_settings.truncate()
+                am_settings.insert_multiple(data.get('data'))
 
         await websocket.send_text(json.dumps(am_settings.all()))
+
 
 @app.websocket('/gu_settings')
 async def gu_settings_endpoint(websocket: WebSocket):
@@ -254,8 +310,18 @@ async def gu_settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            gu_settings.truncate()
-            gu_settings.insert_multiple(data.get('data'))
+            with lock:
+                gu_settings.truncate()
+                gu_settings.insert_multiple(data.get('data'))
+
+            cmd = "docker run -i --rm -v ark:/ark --name ark_oneshot thmhoag/arkserver /ark/update_gus_ini.sh "
+            for setting in gu_settings.all():
+                cmd += f"{setting['key']}={setting['value']} "
+            cmd += " | aha --no-header"
+
+            logger.debug('executing cmd %s:', cmd)
+            async for l in get_lines(cmd):
+                logger.debug(l)
 
         await websocket.send_text(json.dumps(gu_settings.all()))
 

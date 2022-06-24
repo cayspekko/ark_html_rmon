@@ -1,0 +1,11 @@
+{% extends 'card.html' %}
+{% block cardtitle %} GameUserSettings.ini Settings {% endblock %}
+{% block cardcontent %}
+<!--AppendGrid table element-->
+<table id="tblGuAppendGrid"></table>
+
+<!--Script for initialize AppendGrid-->
+<script>
+    var gu_grid = new SettingsGrid("tblGuAppendGrid", "wss://{{ ws_endpoint }}/gu_settings")
+</script>
+{% endblock %}

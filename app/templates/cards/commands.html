@@ -9,7 +9,7 @@
 
 <pre id="command_response"></pre>
 <script>
-    var command_ws = new ReconnectingWebSocket("ws://{{ ws_endpoint }}/command");
+    var command_ws = new ReconnectingWebSocket("wss://{{ ws_endpoint }}/command");
     command_ws.onmessage = function(event) { 
         $('#command_response').html(event.data.trim())
     }
