@@ -135,17 +135,7 @@ async def api_status(credentials: HTTPBasicCredentials = Depends(security)):
 
     cmd = 'docker exec -i ark arkmanager status'
 
-    logger.debug('api is executing command %s', cmd)
-
-    rval = []
-    async for l in get_lines(cmd):
-        # beautify output
-        l = l.decode()
-        l = ansi_escape.sub('', l)
-        l = l.strip()
-        if not l:
-            continue
-        rval.append(l)
+    rval = await run_command(cmd, beautify=True)
 
     return {"data": rval}
 
@@ -156,11 +146,7 @@ async def api_players(credentials: HTTPBasicCredentials = Depends(security)):
 
     cmd = 'docker exec -i ark arkmanager rconcmd listplayers'
 
-    logger.debug('api is executing command %s', cmd)
-
-    rval = []
-    async for l in get_lines(cmd):
-        rval.append(l.decode())
+    rval = await run_command(cmd)
 
     return {"data": rval}
 
@@ -171,11 +157,7 @@ async def api_start(credentials: HTTPBasicCredentials = Depends(security)):
 
     cmd = _run_cmd()
 
-    logger.debug('api is executing command %s', cmd)
-
-    rval = []
-    async for l in get_lines(cmd):
-        rval.append(l.decode())
+    rval = await run_command(cmd)
 
     return {"data": rval}
 
@@ -186,11 +168,7 @@ async def api_stop(credentials: HTTPBasicCredentials = Depends(security)):
 
     cmd = f"docker exec -i ark arkmanager stop --saveworld && docker kill ark"
 
-    logger.debug('api is executing command %s', cmd)
-
-    rval = []
-    async for l in get_lines(cmd):
-        rval.append(l.decode())
+    rval = await run_command(cmd)
 
     return {"data": rval}
 
@@ -201,19 +179,21 @@ async def api_logs(credentials: HTTPBasicCredentials = Depends(security)):
 
     cmd = 'docker logs ark'
 
-    logger.debug('api is executing command %s', cmd)
-
-    rval = []
-    async for l in get_lines(cmd):
-        # beautify output
-        l = l.decode()
-        l = ansi_escape.sub('', l)
-        l = l.strip()
-        if not l:
-            continue
-        rval.append(l)
+    rval = await run_command(cmd, beautify=True)
 
     return {"data": rval}
+
+
+@app.post('/api/daytime')
+async def api_daytime(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+    cmd = "docker exec -i ark arkmanager rconcmd \"settimeofday 6:00\""
+
+    rval = await run_command(cmd)
+
+    return {"data": rval}
+
 
 @app.post("/api/change_password")
 async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
@@ -244,7 +224,8 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
 
     return templates.TemplateResponse("cards.html", {
         "request": request, 
-        "cards": cards, "ws_endpoint": os.getenv('WS_ENDPOINT'), 
+        "cards": cards, 
+        "ws_endpoint": os.getenv('WS_ENDPOINT'), 
         "credentials": credentials
         })
 
@@ -337,6 +318,8 @@ async def command_endpoint(websocket: WebSocket):
         elif data.get('cmd') == "kick":
             player_id = data.get('player_id')
             cmd = f"docker exec -i ark arkmanager rconcmd \"kickplayer {player_id}\" | aha --no-header"
+        elif data.get('cmd') == "daytime":
+            cmd = f"docker exec -i ark arkmanager rconcmd \"settimeofday 6:00\" | aha --no-header"
         elif data.get('cmd') == "cancelshutdown":
             cmd = f"docker exec -i ark arkmanager cancelshutdown | aha --no-header"
         elif data.get('cmd') == "logs":
@@ -427,6 +410,21 @@ async def gu_settings_endpoint(websocket: WebSocket):
                 logger.debug(l)
 
         await websocket.send_text(json.dumps(gu_settings.all()))
+
+
+async def run_command(cmd, beautify=False):
+    logger.debug('api is executing command %s', cmd)
+
+    rval = []
+    async for l in get_lines(cmd):
+        l = l.decode()
+        if beautify:
+            # beautify output
+            l = ansi_escape.sub('', l)
+            l = l.strip()
+        rval.append(l)
+
+    return rval
 
 
 async def get_lines(shell_command):
