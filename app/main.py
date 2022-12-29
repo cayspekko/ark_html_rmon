@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.logger import logger as fastapi_logger
+from fastapi_utils.tasks import repeat_every
 from passlib.context import CryptContext
 from datetime import datetime
 from tinydb import TinyDB, Query
@@ -128,6 +129,45 @@ def _run_cmd():
     cmd = cmd.format(am_s)
     return cmd
 
+@app.on_event("startup")
+@repeat_every(seconds=10*60, logger=logger)
+async def autoshutdown_server():
+    logger.debug('repeat task')
+
+    cmd = r"docker inspect -f '{{.State.Status}}' ark"
+    docker_status = await run_command(cmd)
+    docker_status = docker_status[0]
+    logger.debug('docker_status is %s', docker_status)
+
+    if docker_status == "running":
+        cmd = "docker exec -i ark arkmanager rconcmd listplayers"
+        rval = await run_command(cmd, beautify=True)
+        logger.info('current player info: %s', rval)
+
+        if len(rval) > 1 and "No Players Connected" in rval[1]:
+
+            Poll = Query()
+            db_key = poll_status.get(Poll.key == 'autoshutdown') or {}
+            t = db_key.get("time") or time.time()
+
+            if time.time() - t > (60*60):
+                logger.info('no players connected for an hour, shutting down')
+                rval = await run_command("docker exec -i ark arkmanager stop --saveworld && docker kill ark")
+                logger.info(rval)
+            else:
+                logger.info('idle time detected %d / %d', time.time() - t, 60*60)
+                return
+        else:
+            logger.info("server running, players detected, reset autoshutdown timer")
+
+    else:
+        logger.info("server not running, reset autoshutdown timer")
+
+    Poll = Query()
+    with lock:
+        poll_status.upsert({"key":'autoshutdown', "time":time.time()}, Poll.key == 'autoshutdown')
+
+    
 
 @app.get("/api/status")
 async def api_status(credentials: HTTPBasicCredentials = Depends(security)):
