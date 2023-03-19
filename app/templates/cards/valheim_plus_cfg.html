@@ -1,0 +1,97 @@
+{% extends 'card.html' %}
+{% block cardtitle %} valheim_plus.cfg editor {% endblock %}
+{% block cardcontent %}
+<div class="mb-2" id="editorContainer"></div>
+<pre class="mb-2" id="cmd_result"></pre>
+<a id="save_valheim_plus_cfg" class="btn btn-primary mb-2">Save</a>
+<a id="undo_valheim_plus_cfg" class="btn btn-primary mb-2">Undo</a>
+
+<div class="dropdown">
+    <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      Load Backup
+    </button>
+    <ul class="dropdown-menu" id="backup_dropdown">
+      <li><button class="dropdown-item" type="button">Action</button></li>
+      <li><button class="dropdown-item" type="button">Another action</button></li>
+      <li><button class="dropdown-item" type="button">Something else here</button></li>
+    </ul>
+  </div>
+
+<script>
+    var editorContainer = document.getElementById('editorContainer');
+    var cm = CodeMirror(editorContainer, {
+        lineNumbers: true,
+        mode: 'properties',
+        autoRefresh: true // fixes weird issue where code doesn't show unless clicked
+    });
+    cm.setSize("100%", "500")
+    get_set_editor()
+
+    function get_set_editor(){
+        $.ajax({
+            url : '/api/valheim_plus_cfg',
+            type : 'GET',
+            dataType:'json',
+            success : function(data) {              
+                cm.setValue(data.data)
+            },
+            error : function(request,error) {
+                console.log("Request: "+JSON.stringify(request));
+            }
+        });
+    }
+
+    $('#save_valheim_plus_cfg').on('click', function(e) {
+        $.ajax({
+            type: 'POST',
+            url: '/api/valheim_plus_cfg',
+            dataType: 'text',
+            data: cm.getValue(),
+            success: function(data) {
+                if(data.data){
+                    $('#cmd_result').html(data)
+                }
+                get_set_editor()
+                populate_backup()
+            }
+        })
+    })
+
+    $('#undo_valheim_plus_cfg').on('click', function(e) {
+        get_set_editor()
+    })
+
+    populate_backup()
+
+    function populate_backup(){
+        var dm = $('#backup_dropdown')
+        $.ajax({
+            url : '/api/valheim_plus_cfg_backups',
+            type : 'GET',
+            dataType:'json',
+            success : function(data) {           
+                dm.empty()   
+                data.data.forEach(function(item){
+                    dm.append($('<li><button class="dropdown-item" type="button">' + item + '</button></li>'))
+                })
+                $(".dropdown-item").click(function(e) {
+                    $.ajax({
+                        url : '/api/valheim_plus_cfg_backups/' + e.target.innerHTML,
+                        type : 'GET',
+                        dataType:'json',
+                        success : function(data) {              
+                            cm.setValue(data.data)
+                        },
+                        error : function(request,error) {
+                            console.log("Request: "+JSON.stringify(request));
+                        }
+                    });
+                })
+            },
+            error : function(request,error) {
+                console.log("Request: "+JSON.stringify(request));
+            }
+        });
+    }   
+</script>
+{% endblock %}

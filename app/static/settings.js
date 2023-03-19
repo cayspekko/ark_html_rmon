@@ -1,8 +1,10 @@
 class SettingsGrid {
-    constructor(element_id, ws_endpoint) {
+    constructor(element_id, ws_endpoint, columns = ["key", "value"]) {
         this.element_id = element_id
 
         this.settings_ws = new ReconnectingWebSocket(ws_endpoint);
+
+        this.columns = columns
 
         var me = this
    
@@ -11,26 +13,22 @@ class SettingsGrid {
             uiFramework: "bootstrap4",
             iconFramework: "fontawesome5",
             initRows: 0,
-            columns: [
-                {
-                    name: "key",
-                    display: "Key",
-                    events: {
-                        change: function(e){
-                            me.put_data(e)
+            columns: function(){
+                var rendered_columns = []
+
+                columns.forEach(function(column) {
+                    rendered_columns.push({
+                        name: column,
+                        display: column.charAt(0).toUpperCase() + column.slice(1),
+                        events: {
+                            change: function(e){
+                                me.put_data(e)
+                            }
                         }
-                    }
-                },
-                {
-                    name: "value",
-                    display: "Value",
-                    events: {
-                        change: function(e){
-                            me.put_data(e)
-                        }
-                    }
-                },
-            ],
+                    })
+                })
+                return rendered_columns
+            }(),
             hideButtons: {
                 moveUp: true,
                 moveDown: true,
@@ -55,7 +53,12 @@ class SettingsGrid {
     put_data(e){
         if(e){
             var check = this.myAppendGrid.getRowValue(this.myAppendGrid.getRowIndex(e.uniqueIndex))
-            if(!(check['key'] && check['value']))
+            var has_values = this.columns.every(function(column) {
+                if(!check[column])
+                    return false
+                return true
+            })
+            if(!(has_values))
                 return
         }
 

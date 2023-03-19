@@ -2,7 +2,7 @@
     <div class="card p-1">
         <div class="card-body">
             <h5 class="card-title">{% block cardtitle %}Test{% endblock %}</h5>
-            <p class="card-text">{% block cardcontent %}Test Content{% endblock %}</p>
+            {% block cardcontent %}Test Content{% endblock %}
         </div>
     </div>
 </div>

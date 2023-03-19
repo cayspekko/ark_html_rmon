@@ -1,34 +1,54 @@
 import asyncio
-import time 
 import json
 import os
 import re
+import time
+import uuid
 
 from dotenv import load_dotenv
-from pydantic import Json
+
 load_dotenv(verbose=True)
 
 from asyncio.subprocess import PIPE, STDOUT
+from datetime import datetime
+from functools import wraps
 
-from fastapi import FastAPI, Request, WebSocket, Depends, HTTPException, status, Form 
-from starlette.websockets import WebSocketDisconnect
-from websockets.exceptions import ConnectionClosed
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import (Body, Depends, FastAPI, Form, HTTPException, Request, WebSocket, status)
+from fastapi.logger import logger as fastapi_logger
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.logger import logger as fastapi_logger
 from fastapi_utils.tasks import repeat_every
-from passlib.context import CryptContext
-from datetime import datetime
-from tinydb import TinyDB, Query
-from tinydb.operations import set as db_set
 from filelock import FileLock
+from passlib.context import CryptContext
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.websockets import WebSocketDisconnect
+from tinydb import Query, TinyDB, JSONStorage
+from tinydb.operations import set as db_set
+from websockets.exceptions import ConnectionClosed
+
+
+# simple FileLock extension to tinydb to protect read/writes
+class FileLockingStorage(JSONStorage):
+    def __init__(self, path: str, **kwargs):
+        self.lock = FileLock(path + ".lock")
+        super().__init__(path, **kwargs)
+
+    def read(self):
+        with self.lock:
+            return super().read()
+
+    def write(self, data):
+        with self.lock:
+            super().write(data)
+
 
 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])') # matches ansi escape characters in strings
 
 # logging solution in docker https://github.com/tiangolo/uvicorn-gunicorn-fastapi-docker/issues/19#issuecomment-720720048
 import logging
+
 gunicorn_logger = logging.getLogger("gunicorn")
 log_level = gunicorn_logger.level
 
@@ -48,6 +68,7 @@ fastapi_logger.setLevel(log_level)
 
 logger = logging.getLogger(__name__)
 
+
 RUN_CMD = """#!/bin/bash
 docker rm ark
 docker run -d --restart=always -v steam:/home/steam/Steam \
@@ -62,6 +83,38 @@ docker run -d --restart=always -v steam:/home/steam/Steam \
         --name ark \
         thmhoag/arkserver"""
 
+
+VALHEIM_RUN_CMD = """#!/bin/bash
+docker rm valheim
+docker run -d --restart=no \
+    -v valheim_saves:/home/steam/.config/unity3d/IronGate/Valheim \
+    -v valheim_server:/home/steam/valheim \
+    -v valheim_backups:/home/steam/backups \
+    -p 2456:2456/udp \
+    -p 2457:2457/udp \
+    -p 2458:2458/udp \
+    -e PORT=2456 \
+    -e NAME="World of Doug" \
+    -e WORLD="Dedicated" \
+    -e PASSWORD="1mth3b3st" \
+    -e TZ="America/Boise" \
+    -e PUBLIC=1 \
+    -e AUTO_UPDATE=0 \
+    -e AUTO_UPDATE_SCHEDULE="0 1 * * *" \
+    -e AUTO_BACKUP=1 \
+    -e AUTO_BACKUP_SCHEDULE="*/15 * * * *" \
+    -e AUTO_BACKUP_REMOVE_OLD=1 \
+    -e AUTO_BACKUP_DAYS_TO_LIVE=3 \
+    -e AUTO_BACKUP_ON_UPDATE=1 \
+    -e AUTO_BACKUP_ON_SHUTDOWN=1 \
+    -e UPDATE_ON_STARTUP=0 \
+    -e FORCE_INSTALL=1 \
+    -e TYPE=ValheimPlus \
+    -e MODS={} \
+    --name valheim \
+    mbround18/valheim:1"""
+
+
 templates = Jinja2Templates(directory="templates")
 
 security = HTTPBasic()
@@ -70,31 +123,15 @@ users = None
 settings = None
 am_settings = None
 gu_settings = None
+valheim_mods = None
 poll_status = None
 
 pwd_context = None
 
-lock = None
-
-async def startup():
-    global users, settings, am_settings, gu_settings, poll_status, pwd_context, lock
-
-    logger.info('in startup')
-
-    users = TinyDB('db.json') 
-    settings = users.table('settings')
-    am_settings = users.table('am_settings')
-    gu_settings = users.table('gu_settings')
-    poll_status = users.table('poll_status')
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    lock = FileLock('db.json.lock')
-
-    logger.info('end startup')
-
-
 app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=os.getenv('SESSION_KEY'), max_age=60*60, same_site='strict', https_only=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.add_event_handler("startup", startup)
+
 
 logger.info("___---___--- START APP (worker) ---___---___")
 
@@ -110,7 +147,26 @@ def _hash(new_payload, key="status"):
     return (new_hash == old_hash)
 
 
-def _authorize(credentials):
+def _run_cmd():
+    cmd = RUN_CMD
+    am_s = ""
+    for d in am_settings.all():
+        am_s += f"-e {d['key']}=\"{d['value']}\" "
+    cmd = cmd.format(am_s)
+    return cmd
+
+
+def _valheim_run_cmd():
+    cmd = VALHEIM_RUN_CMD
+    mods = "\""
+    for d in valheim_mods.all():
+        mods += f"{d['value']},\n"
+    mods += "\""
+    cmd = cmd.format(mods)
+    return cmd
+
+
+def _authorize(credentials, request: Request = None):
     User = Query()
     u = users.get(User.username == credentials.username)
     if not (u and pwd_context.verify(credentials.password, u['password'])):
@@ -119,15 +175,45 @@ def _authorize(credentials):
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Basic"}
         )
+    if request:
+        new_uuid = str(uuid.uuid4())
+        users.upsert({'uuid':new_uuid}, User.username == credentials.username)
+        request.session['uuid'] = new_uuid
 
 
-def _run_cmd():
-    cmd = RUN_CMD
-    am_s = ""
-    for d in am_settings.all():
-        am_s += f"-e {d['key']}=\"{d['value']}\" "
-    cmd = cmd.format(am_s)
-    return cmd
+def authorize(credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials)
+
+
+def authorize_ws(func):
+    @wraps(func) # not exactly sure why this is needed but it doesn't work without it
+    async def wrapped(websocket):
+        User = Query()
+        u = users.get(User.uuid == websocket.session.get("uuid"))
+        if not u:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        return await func(websocket)
+    return wrapped
+
+
+@app.on_event("startup")
+async def startup():
+    global users, settings, am_settings, valheim_mods, gu_settings, poll_status, pwd_context, lock
+
+    logger.info('in startup')
+
+    users = TinyDB('db.json', storage=FileLockingStorage) 
+    settings = users.table('settings')
+    am_settings = users.table('am_settings')
+    gu_settings = users.table('gu_settings')
+    valheim_mods = users.table('valheim_mods')
+    poll_status = users.table('poll_status')
+    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+    logger.info('end startup')
+
 
 @app.on_event("startup")
 @repeat_every(seconds=10*60, logger=logger)
@@ -164,14 +250,11 @@ async def autoshutdown_server():
         logger.info("server not running, reset autoshutdown timer")
 
     Poll = Query()
-    with lock:
-        poll_status.upsert({"key":'autoshutdown', "time":time.time()}, Poll.key == 'autoshutdown')
-
+    poll_status.upsert({"key":'autoshutdown', "time":time.time()}, Poll.key == 'autoshutdown')
     
 
-@app.get("/api/status")
-async def api_status(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+@app.get("/api/status", dependencies=[Depends(authorize)])
+async def api_status():
 
     cmd = 'docker exec -i ark arkmanager status'
 
@@ -180,10 +263,8 @@ async def api_status(credentials: HTTPBasicCredentials = Depends(security)):
     return {"data": rval}
 
 
-@app.get("/api/players")
-async def api_players(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
-
+@app.get("/api/players", dependencies=[Depends(authorize)])
+async def api_players():
     cmd = 'docker exec -i ark arkmanager rconcmd listplayers'
 
     rval = await run_command(cmd)
@@ -191,9 +272,8 @@ async def api_players(credentials: HTTPBasicCredentials = Depends(security)):
     return {"data": rval}
 
 
-@app.post('/api/start')
-async def api_start(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+@app.post('/api/start', dependencies=[Depends(authorize)])
+async def api_start():
 
     cmd = _run_cmd()
 
@@ -202,9 +282,8 @@ async def api_start(credentials: HTTPBasicCredentials = Depends(security)):
     return {"data": rval}
 
 
-@app.post('/api/stop')
-async def api_stop(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+@app.post('/api/stop', dependencies=[Depends(authorize)])
+async def api_stop():
 
     cmd = f"docker exec -i ark arkmanager stop --saveworld && docker kill ark"
 
@@ -213,9 +292,8 @@ async def api_stop(credentials: HTTPBasicCredentials = Depends(security)):
     return {"data": rval}
 
 
-@app.get("/api/logs")
-async def api_logs(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+@app.get("/api/logs", dependencies=[Depends(authorize)])
+async def api_logs():
 
     cmd = 'docker logs ark'
 
@@ -224,9 +302,8 @@ async def api_logs(credentials: HTTPBasicCredentials = Depends(security)):
     return {"data": rval}
 
 
-@app.post('/api/daytime')
-async def api_daytime(credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+@app.post('/api/daytime', dependencies=[Depends(authorize)])
+async def api_daytime():
 
     cmd = "docker exec -i ark arkmanager rconcmd \"settimeofday 6:00\""
 
@@ -236,38 +313,86 @@ async def api_daytime(credentials: HTTPBasicCredentials = Depends(security)):
 
 
 @app.post("/api/change_password")
-async def change_password(psw: str=Form(...),  credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
-
+async def change_password(request: Request, psw: str = Form(...), credentials: HTTPBasicCredentials = Depends(security)):
+    _authorize(credentials, request)
     User = Query()
     new_pw = pwd_context.hash(psw)
-    with lock:
-        users.update(db_set('password', new_pw), User.username == credentials.username)
+    users.update(db_set('password', new_pw), User.username == credentials.username)
     return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND) 
+
+
+@app.get("/api/valheim_plus_cfg", dependencies=[Depends(authorize)])
+async def get_valheim_plus_cfg():
+    cmd = "docker exec -u 1000:1000 -i valheim cat /home/steam/valheim/BepInEx/config/valheim_plus.cfg"
+
+    rval = await run_command(cmd)
+
+    return {"data": "\n".join(rval)}
+
+
+@app.get("/api/valheim_plus_cfg_backups", dependencies=[Depends(authorize)])
+async def get_valheim_plus_cfg_backups():
+    cmd = 'docker exec -u 1000:1000 -i valheim bash -c "ls -1 /home/steam/valheim/BepInEx/config/valheim_plus.cfg.* | xargs -n 1 basename"'
+
+    rval = await run_command(cmd)
+
+    return {"data": rval}
+
+@app.get("/api/valheim_plus_cfg_backups/{filename}", dependencies=[Depends(authorize)])
+async def get_valheim_plus_cfg_backup_filename(filename: str):
+    cmd = f"docker exec -u 1000:1000 -i valheim cat /home/steam/valheim/BepInEx/config/{filename}"
+
+    rval = await run_command(cmd)
+
+    return {"data": "\n".join(rval)}
+
+
+@app.post("/api/valheim_plus_cfg", dependencies=[Depends(authorize)])
+async def post_valheim_plus_cfg(data: str = Body(...)):
+    data = data.replace('"', '\\"') # delimit "
+
+    cmd = f'docker exec -u 1000:1000 -i valheim bash -c "cp /home/steam/valheim/BepInEx/config/valheim_plus.cfg /home/steam/valheim/BepInEx/config/valheim_plus.cfg.{datetime.now().strftime("%y%m%d%H%M%S")}"'
+    rval = await run_command(cmd)
+
+    cmd = f'docker exec -u 1000:1000 -i valheim bash -c "cat << EOF > /home/steam/valheim/BepInEx/config/valheim_plus.cfg\n{data}\nEOF"'
+    rval.extend(await run_command(cmd))
+
+    return {"data": rval} 
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request, credentials: HTTPBasicCredentials = Depends(security)):
-    _authorize(credentials)
+    _authorize(credentials, request)
 
-    cards = [
+    ark_cards = [
         "cards/default.html",
         "cards/status.html",
         "cards/start.html",
         "cards/players.html",
-        "cards/commands.html",
         "cards/am_settings.html",
         "cards/settings.html",
-        "cards/gu_settings.html",
+        "cards/gu_settings.html"
+    ]
+
+    valheim_cards = [
+        "cards/valheim_status.html",
+        "cards/valheim_commands.html",
+        "cards/valheim_mods.html",
+        "cards/valheim_plus_cfg.html"
+    ]
+
+    misc_cards = [
         "cards/password.html"
     ]
 
     return templates.TemplateResponse("cards.html", {
-        "request": request, 
-        "cards": cards, 
+        "request": request, # This is required for jinja, but not used in my templates
+        "ark_cards": ark_cards,
+        "valheim_cards": valheim_cards,
+        "misc_cards": misc_cards, 
         "ws_endpoint": os.getenv('WS_ENDPOINT'), 
         "credentials": credentials
-        })
+    })
 
 
 async def websocket_poll(websocket, key="status"):
@@ -290,13 +415,15 @@ async def websocket_poll(websocket, key="status"):
         time_now = time.time()
 
         if not db_key or (time_now - db_key["time"]) > 5:
-            with lock:
-                poll_status.update({"time":time.time()}, Poll.key == key)            
+            poll_status.update({"time":time.time()}, Poll.key == key)            
 
             cmd = 'docker exec -i ark arkmanager status | aha --no-header'
 
             if key == "players":
                 cmd =  "docker exec -i ark arkmanager rconcmd listplayers | aha --no-header"
+
+            elif key == "valheim_status":
+                cmd = "docker exec -u 1000:1000 -i valheim odin status | aha --no-header"
 
             logger.debug('executing command %s', cmd)
 
@@ -307,8 +434,7 @@ async def websocket_poll(websocket, key="status"):
             if not _hash(rval, key):
                 db_key["updated"] = [_now()]
                 db_key["payload"] = rval
-                with lock:
-                    poll_status.upsert({"key":key, "updated": db_key["updated"], "payload": db_key["payload"]}, Poll.key == key)
+                poll_status.upsert({"key":key, "updated": db_key["updated"], "payload": db_key["payload"]}, Poll.key == key)
 
         updated = db_key.get("updated") or [_now()]
         payload = db_key.get("payload") or ["checking..."]
@@ -329,17 +455,24 @@ async def websocket_poll(websocket, key="status"):
 
 
 @app.websocket("/status")
+@authorize_ws
 async def status_endpoint(websocket: WebSocket):
     await websocket_poll(websocket)
 
 
+@app.websocket("/valheim_status")
+@authorize_ws
+async def status_endpoint(websocket: WebSocket):
+    await websocket_poll(websocket, key="valheim_status")
+
+
 @app.websocket("/players")
+@authorize_ws
 async def players_endpoint(websocket: WebSocket):
     await websocket_poll(websocket, key="players")
 
 
-@app.websocket("/command")
-async def command_endpoint(websocket: WebSocket):
+async def ws_command(websocket: WebSocket, cmd_dict: dict):
     await websocket.accept()
     while True:
         try:
@@ -350,20 +483,7 @@ async def command_endpoint(websocket: WebSocket):
             await websocket.close()
             return
         data = json.loads(data)
-        cmd = "docker ps"
-        if data.get('cmd') == "start":
-            cmd = f"{_run_cmd()} | aha --no-header"
-        elif data.get('cmd') == "stop":
-            cmd = f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark"
-        elif data.get('cmd') == "kick":
-            player_id = data.get('player_id')
-            cmd = f"docker exec -i ark arkmanager rconcmd \"kickplayer {player_id}\" | aha --no-header"
-        elif data.get('cmd') == "daytime":
-            cmd = f"docker exec -i ark arkmanager rconcmd \"settimeofday 6:00\" | aha --no-header"
-        elif data.get('cmd') == "cancelshutdown":
-            cmd = f"docker exec -i ark arkmanager cancelshutdown | aha --no-header"
-        elif data.get('cmd') == "logs":
-            cmd = f"docker logs ark | aha --no-header"
+        cmd = (cmd_dict.get(data['cmd']) or (lambda d: "docker ps"))(data)
         rval = []
 
         logger.debug('executing command %s', cmd)
@@ -373,7 +493,31 @@ async def command_endpoint(websocket: WebSocket):
         await websocket.send_text("</br>".join(rval))
 
 
+@app.websocket("/command")
+@authorize_ws
+async def command_endpoint(websocket: WebSocket):
+    await ws_command(websocket, {
+        "start": lambda d: f"{_run_cmd()} | aha --no-header",
+        "stop": lambda d: f"docker exec -i ark arkmanager stop --saveworld | aha --no-header && docker kill ark",
+        "kick": lambda d: f"docker exec -i ark arkmanager rconcmd \"kickplayer {d.get('player_id')}\" | aha --no-header",
+        "daytime": lambda d: f"docker exec -i ark arkmanager rconcmd \"settimeofday 6:00\" | aha --no-header",
+        "cancelshutdown": lambda d: f"docker exec -i ark arkmanager cancelshutdown | aha --no-header",
+        "logs": lambda d: f"docker logs ark | aha --no-header"
+    })
+
+
+@app.websocket('/valheim_command')
+@authorize_ws
+async def valheim_command_endpoint(websocket: WebSocket):
+    await ws_command(websocket, {
+        "logs": lambda d: f"docker logs valheim | aha --no-header",
+        "stop": lambda d: f"docker exec -i valheim kill 1 && echo 'Killing Valheim! Check logs!'",
+        "start": lambda d: f"{_valheim_run_cmd()} | aha --no-header"
+    })
+
+
 @app.websocket('/settings')
+@authorize_ws
 async def settings_endpoint(websocket: WebSocket):
     await websocket.accept()
     await websocket.send_text(json.dumps(settings.all()))
@@ -386,9 +530,8 @@ async def settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            with lock:
-                settings.truncate()
-                settings.insert_multiple(data.get('data'))
+            settings.truncate()
+            settings.insert_multiple(data.get('data'))
 
             cmd = "docker run -i --rm -v ark:/ark --name ark_oneshot thmhoag/arkserver /ark/update_game_ini.sh "
             for setting in settings.all():
@@ -404,6 +547,7 @@ async def settings_endpoint(websocket: WebSocket):
 
 
 @app.websocket('/am_settings')
+@authorize_ws
 async def am_settings_endpoint(websocket: WebSocket):
     await websocket.accept()
     await websocket.send_text(json.dumps(am_settings.all()))
@@ -416,14 +560,14 @@ async def am_settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            with lock:
-                am_settings.truncate()
-                am_settings.insert_multiple(data.get('data'))
+            am_settings.truncate()
+            am_settings.insert_multiple(data.get('data'))
 
         await websocket.send_text(json.dumps(am_settings.all()))
 
 
 @app.websocket('/gu_settings')
+@authorize_ws
 async def gu_settings_endpoint(websocket: WebSocket):
     await websocket.accept()
     await websocket.send_text(json.dumps(gu_settings.all()))
@@ -436,9 +580,8 @@ async def gu_settings_endpoint(websocket: WebSocket):
             return
         data = json.loads(data)
         if data.get('cmd') == 'put':
-            with lock:
-                gu_settings.truncate()
-                gu_settings.insert_multiple(data.get('data'))
+            gu_settings.truncate()
+            gu_settings.insert_multiple(data.get('data'))
 
             cmd = "docker run -i --rm -v ark:/ark --name ark_oneshot thmhoag/arkserver /ark/update_gus_ini.sh "
             for setting in gu_settings.all():
@@ -450,6 +593,26 @@ async def gu_settings_endpoint(websocket: WebSocket):
                 logger.debug(l)
 
         await websocket.send_text(json.dumps(gu_settings.all()))
+
+
+@app.websocket('/valheim_mods')
+@authorize_ws
+async def valheim_mods_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    await websocket.send_text(json.dumps(valheim_mods.all()))
+
+    while True:
+        try:
+            data = await websocket.receive_text()
+        except WebSocketDisconnect:
+            await websocket.close()
+            return
+        data = json.loads(data)
+        if data.get('cmd') == 'put':
+            valheim_mods.truncate()
+            valheim_mods.insert_multiple(data.get('data'))
+
+        await websocket.send_text(json.dumps(valheim_mods.all()))
 
 
 async def run_command(cmd, beautify=False):

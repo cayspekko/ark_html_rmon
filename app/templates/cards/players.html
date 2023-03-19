@@ -1,22 +1,16 @@
 {% extends 'card.html' %}
 {% block cardtitle %} Players {% endblock %}
 {% block cardcontent %}
-
-</pre>
+<pre>
     <table id='players_messages'></table>
 </pre>
 
 <script>
     var players_ws = new ReconnectingWebSocket("wss://{{ ws_endpoint }}/players");
     players_ws.onmessage = function(event) {
-        var table = document.getElementById('players_messages')
-        var tr = document.createElement('tr')
-        var td = document.createElement('td')
-        table.innerText = ''
-        table.innerHTML = ''
-        td.innerHTML = event.data.trim()
-        tr.appendChild(td)
-        table.appendChild(tr)
+        var table = $("#players_messages")
+        table.empty()
+        table.append(`<tr><td>${event.data.trim()}</td></tr>`)
     };
 </script>
 {% endblock %}

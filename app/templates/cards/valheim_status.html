@@ -1,0 +1,16 @@
+{% extends 'card.html' %}
+{% block cardtitle %} Valheim status {% endblock %}
+{% block cardcontent %}
+<pre>
+    <table id='valheim_status_messages'></table>
+</pre>
+
+<script>
+    var valheim_status_ws = new ReconnectingWebSocket("wss://{{ ws_endpoint }}/valheim_status");
+    valheim_status_ws.onmessage = function(event) {
+        var table = $("#valheim_status_messages")
+        table.empty()
+        table.append(`<tr><td>${event.data.trim()}</td></tr>`)
+    };
+</script>
+{% endblock %}

@@ -6,7 +6,15 @@
 <a id="cancelshutdown" class="btn btn-primary">Cancel Shutdown</a>
 <a id="daytime" class="btn btn-primary">Set Daytime</a>
 <a id="logs" class="btn btn-primary">Logs</a>
-<pre id="response"></pre>
+
+<p><div class="input-group mb-3 w-50">
+    <input type="text" class="form-control" placeholder="SteamId" aria-label="SteamId" aria-describedby="basic-addon2">
+    <div class="input-group-append">
+        <button id="kick" class="btn btn-primary" type="button">Kick</button>
+    </div>
+</div></p>
+
+<p><pre id="response"></pre></p>
 <script>
     var start_ws = new ReconnectingWebSocket("wss://{{ ws_endpoint }}/command");
     start_ws.onmessage = function(event) { 
@@ -35,6 +43,13 @@
     $('#logs').on('click', function(e) {
         start_ws.send(JSON.stringify({
             "cmd": "logs"
+        }))
+    })
+    $('#kick').on('click', function(e) {
+        var player_id = $('#steamid').val()
+        start_ws.send(JSON.stringify({
+            "cmd": "kick",
+            "player_id": player_id
         }))
     })
 </script>

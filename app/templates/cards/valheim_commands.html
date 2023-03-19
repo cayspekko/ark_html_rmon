@@ -1,0 +1,37 @@
+{% extends 'card.html' %}
+{% block cardtitle %} Control Valheim {% endblock %}
+{% block cardcontent %}
+<a id="valheim_start" class="btn btn-primary mb-2">Start</a>
+<a id="valheim_stop" class="btn btn-primary mb-2 disabled">Stop</a>
+<a id="valheim_logs" class="btn btn-primary mb-2">Logs</a>
+
+<pre class="overflow-auto mb-2" style="max-height: 500px;" id="valheim_command_response"></pre>
+
+<script>
+    var valheim_command_ws = new ReconnectingWebSocket("wss://{{ ws_endpoint }}/valheim_command");
+    valheim_command_ws.onmessage = function(event) { 
+        var valheim_command_response = $('#valheim_command_response')
+        valheim_command_response.html(event.data.trim())
+        valheim_command_response[0].scrollTop = valheim_command_response[0].scrollHeight
+
+
+    }
+    $('#valheim_logs').on('click', function(e) {
+        valheim_command_ws.send(JSON.stringify({
+            "cmd": "logs"
+        }))
+    })
+
+    $('#valheim_start').on('click', function(e) {
+        valheim_command_ws.send(JSON.stringify({
+            "cmd": "start"
+        }))
+    })
+
+    $('#valheim_stop').on('click', function(e) {
+        valheim_command_ws.send(JSON.stringify({
+            "cmd": "stop"
+        }))
+    })
+</script>
+{% endblock %}

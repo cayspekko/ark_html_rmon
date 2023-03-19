@@ -1,6 +1,5 @@
 from passlib.context import CryptContext
 from tinydb import TinyDB, Query
-from tinydb.operations import set as db_set
 
 def change_password(username, psw):
     User = Query()

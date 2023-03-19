@@ -5,28 +5,68 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <!--Bootstrap CSS for styling-->
-    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.2.3/css/bootstrap.min.css"/>
     <!--Font Awesome webfont for appendGrid button icons-->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.12.1/css/all.min.css"/>
-
-    <title>Ark Server</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.3.0/css/all.min.css"/>
+    <!--Code Mirror for editing text files-->
+    <link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.css'>
+    <title>Doug's Servers</title>
   </head>
   <body>
     <!--jQuery first, then Popper.js, then Bootstrap JS -->
-    <script src="https://code.jquery.com/jquery-3.4.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/2.11.6/umd/popper.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.2.3/js/bootstrap.min.js"></script>
     <!--appendGrid JS library-->
-    <script src="https://cdn.jsdelivr.net/npm/jquery.appendgrid@2/dist/AppendGrid.js"></script>
-    <!--Script for initialize appendGrid-->
+    <script src="https://cdn.jsdelivr.net/npm/jquery.appendgrid@2.1.1/dist/AppendGrid.min.js"></script>
+    <!--codemirror text editor-->
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/codemirror.min.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/mode/properties/properties.js'></script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/codemirror/6.65.7/addon/display/autorefresh.js'></script>
 
     <!--My Scripts-->
     <script src="./static/reconnecting-websocket.min.js"></script>
     <script src="./static/settings.js"></script>
+  
+    <script>
+      // Jumps to tab based on #, adds the # when tab is clicked
+      $(document).ready(function() {        
+          var url = document.location.toString();
+          if (url.match('#')) {
+            var el = $('.nav-tabs a[href="#' + url.split('#')[1] + '"]')
+            el.tab('show')
+          }
+          $(".nav-tabs a").click(function(e){
+            window.location.hash = this.hash
+          })
+      });
+    </script>
 
-    <div class="container-fluid"></div>
-        {% block cards %}
-        {% endblock %}
+    <ul class="nav nav-tabs" id="myTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <a class="nav-link active" id="ark-tab" data-bs-toggle="tab" data-bs-target="#ark-tab-pane" aria-controls="ark-tab-pane" aria-selected="true" href="#ark">Ark</a>
+      </li>
+      <li class="nav-item" role="presentation">
+        <a class="nav-link" id="valheim-tab" data-bs-toggle="tab" data-bs-target="#valheim-tab-pane" aria-controls="valheim-tab-pane" aria-selected="false" href="#valheim">Valheim</a>
+      </li>
+      <li class="nav-item" role="presentation">
+        <a class="nav-link" id="misc-tab" data-bs-toggle="tab" data-bs-target="#misc-tab-pane" aria-controls="misc-tab-pane" aria-selected="false" href="#misc">Misc</a>
+      </li>
+    </ul>
+    <div class="tab-content" id="myTabContent">
+      <div class="tab-pane fade show active" id="ark-tab-pane" role="tabpanel" aria-labelledby="ark-tab" tabindex="0">
+          {% block ark_cards %}
+          {% endblock %}
+      </div>
+      <div class="tab-pane fade" id="valheim-tab-pane" role="tabpanel" aria-labelledby="valheim-tab" tabindex="0">
+          {% block valheim_cards %}
+          {% endblock %}
+      </div>
+      <div class="tab-pane fade" id="misc-tab-pane" role="tabpanel" aria-labelledby="misc-tab" tabindex="0">
+          {% block misc_cards %}
+          {% endblock %}
+      </div>
     </div>
+
   </body>
 </html>

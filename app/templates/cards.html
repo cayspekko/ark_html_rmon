@@ -1,6 +1,16 @@
 {% extends 'index.html' %}
-{% block cards %}
-    {% for card in cards %}
+{% block ark_cards %}
+    {% for card in ark_cards %}
+        {% include card %}
+    {% endfor %}
+{% endblock %}
+{% block valheim_cards %}
+    {% for card in valheim_cards %}
+        {% include card %}
+    {% endfor %}
+{% endblock %}
+{% block misc_cards %}
+    {% for card in misc_cards %}
         {% include card %}
     {% endfor %}
 {% endblock %}
