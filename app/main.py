@@ -68,6 +68,8 @@ fastapi_logger.setLevel(log_level)
 
 logger = logging.getLogger(__name__)
 
+logging.getLogger("filelock").setLevel("INFO") # filelock debug is too verbose
+
 
 RUN_CMD = """#!/bin/bash
 docker rm ark
@@ -109,7 +111,7 @@ docker run -d --restart=no \
     -e AUTO_BACKUP_ON_SHUTDOWN=1 \
     -e UPDATE_ON_STARTUP=0 \
     -e FORCE_INSTALL=1 \
-    -e TYPE=ValheimPlus \
+    -e TYPE=bepinex \
     -e MODS={} \
     --name valheim \
     mbround18/valheim:1"""
@@ -391,12 +393,18 @@ async def index(request: Request, credentials: HTTPBasicCredentials = Depends(se
         "valheim_cards": valheim_cards,
         "misc_cards": misc_cards, 
         "ws_endpoint": os.getenv('WS_ENDPOINT'), 
-        "credentials": credentials
+        "username": credentials.username
     })
 
+def ws_username(websocket):
+    uuid = websocket.session.get('uuid')
+    Q = Query()
+    user = users.get(Q.uuid == uuid)
+    return user.get('username')
 
 async def websocket_poll(websocket, key="status"):
     await websocket.accept()
+    logger.info("accepted client on %s: %s %s" % (websocket.url, ws_username(websocket), websocket.client.host))
     logger.info('begin websocket_poll on %s', key)
     Poll = Query()
     db_key = poll_status.get(Poll.key == key) or {}
@@ -425,7 +433,7 @@ async def websocket_poll(websocket, key="status"):
             elif key == "valheim_status":
                 cmd = "docker exec -u 1000:1000 -i valheim odin status | aha --no-header"
 
-            logger.debug('executing command %s', cmd)
+            logger.debug('websocket_poll executing command %s', cmd)
 
             rval = []
             async for l in get_lines(cmd):
@@ -486,7 +494,7 @@ async def ws_command(websocket: WebSocket, cmd_dict: dict):
         cmd = (cmd_dict.get(data['cmd']) or (lambda d: "docker ps"))(data)
         rval = []
 
-        logger.debug('executing command %s', cmd)
+        logger.debug('ws_command executing command %s', cmd)
 
         async for l in get_lines(cmd):
             rval.append(l.decode())
@@ -512,7 +520,8 @@ async def valheim_command_endpoint(websocket: WebSocket):
     await ws_command(websocket, {
         "logs": lambda d: f"docker logs valheim | aha --no-header",
         "stop": lambda d: f"docker exec -i valheim kill 1 && echo 'Killing Valheim! Check logs!'",
-        "start": lambda d: f"{_valheim_run_cmd()} | aha --no-header"
+        "start": lambda d: f"{_valheim_run_cmd()} | aha --no-header",
+        "restart": lambda d: f"docker exec -u 1000:1000 -i valheim bash -c 'cd /home/steam/valheim && odin stop && odin start'"
     })
 
 

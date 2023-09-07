@@ -2,7 +2,8 @@
 {% block cardtitle %} Control Valheim {% endblock %}
 {% block cardcontent %}
 <a id="valheim_start" class="btn btn-primary mb-2">Start</a>
-<a id="valheim_stop" class="btn btn-primary mb-2 disabled">Stop</a>
+<a id="valheim_stop" class="btn btn-primary mb-2">Stop</a>
+<a id="valheim_restart" class="btn btn-primary mb-2">Quick Restart</a>
 <a id="valheim_logs" class="btn btn-primary mb-2">Logs</a>
 
 <pre class="overflow-auto mb-2" style="max-height: 500px;" id="valheim_command_response"></pre>
@@ -31,6 +32,12 @@
     $('#valheim_stop').on('click', function(e) {
         valheim_command_ws.send(JSON.stringify({
             "cmd": "stop"
+        }))
+    })
+
+    $('#valheim_restart').on('click', function(e) {
+        valheim_command_ws.send(JSON.stringify({
+            "cmd": "restart"
         }))
     })
 </script>
